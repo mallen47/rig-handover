@@ -1,0 +1,62 @@
+# Plan morning-digest § 3/§ 4 (ADR 0003): a preview is one static HTML file on a public host.
+# The page is built here and deployed to GitHub Pages; it is never committed to the repo.
+# LANE_MARKER comes from the repo secret. Delete the secret and run again for the clean-up
+# (§ 4): the banner then reads "no marker set" on the same link.
+name: preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      night:
+        description: Night to preview (YYYY-MM-DD)
+        default: '2026-10-28'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: pnpm install
+      - name: Save the digest page as one HTML file
+        env:
+          LANE_ID: lane-07
+          LANE_MARKER: ${{ secrets.LANE_MARKER }}
+          PORT: 8787
+          NIGHT: ${{ inputs.night }}
+        run: |
+          [[ "$NIGHT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "bad night"; exit 1; }
+          pnpm start > server.log 2>&1 &
+          for i in $(seq 1 50); do curl -sf localhost:8787/health > /dev/null && break; sleep 0.2; done
+          mkdir -p _site
+          curl -sf -o _site/index.html "localhost:8787/digest/$NIGHT"
+          kill %1
+          if grep -q 'no marker set' _site/index.html; then echo "banner: no marker set"; else echo "banner: marker set"; fi
+          ! grep -qiE '<script|<link|src=' _site/index.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
